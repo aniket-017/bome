@@ -1,0 +1,14 @@
+fastapi>=0.115
+uvicorn[standard]>=0.24
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
+alembic>=1.12
+pydantic>=2.5
+pydantic-settings>=2.1
+python-multipart>=0.0.6
+python-calamine>=0.2
+openpyxl>=3.1
+rapidfuzz>=3.5
+httpx>=0.25
+openai>=1.40
+pytest>=7.4
