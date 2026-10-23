@@ -74,7 +74,7 @@ jobs:
              --name bome \
              --interpreter "$HOME/bome/backend/.venv/bin/python" \
              --cwd "$HOME/bome/backend" \
-             -- app.main:app --host 127.0.0.1 --port 8767
+             -- app.main:app --host 0.0.0.0 --port 8767
            pm2 save
 
            echo "📋 PM2 process list:"
