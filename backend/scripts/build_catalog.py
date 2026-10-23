@@ -100,6 +100,10 @@ def replace(backup: bool = True) -> None:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     with psycopg.connect(get_settings().psycopg_dsn) as conn:
         with conn.cursor() as cur:
+            moved = cur.execute("SELECT EXISTS (SELECT 1 FROM grn_lines) OR EXISTS (SELECT 1 FROM mr_lines) "
+                                "OR EXISTS (SELECT 1 FROM stock_txns WHERE txn_type <> 'OPENING')").fetchone()[0]
+            if moved:
+                raise SystemExit("refusing to replace the parts master: GRN, MR or stock ledger rows reference it")
             old = cur.execute("SELECT count(*) FROM parts").fetchone()[0]
             if backup:
                 for table in ("parts", "bom_lines"):
@@ -108,6 +112,7 @@ def replace(backup: bool = True) -> None:
             # TRUNCATE ... CASCADE would also empty bom_lines; detach the lines and delete instead
             cur.execute("UPDATE bom_lines SET matched_part_id = NULL, match_score = NULL, "
                         "match_status = 'unmatched', candidates = '[]'")
+            cur.execute("DELETE FROM stock_txns")
             cur.execute("DELETE FROM parts")
             cur.execute("ALTER SEQUENCE parts_id_seq RESTART WITH 1")
             for name in INDEXES:

@@ -290,3 +290,16 @@ def infer_noun(attrs: dict) -> str | None:
     if "+" in ptype:
         return "STUD"
     return NOUN_BY_PTYPE.get(ptype)
+
+
+def derive_part_fields(description: str) -> dict:
+    """Search/match columns of a parts-master row derived from its description."""
+    norm = normalize(description)
+    attrs = extract_attrs(norm)
+    return {
+        "description_norm": norm,
+        # ' ' || description_norm || ' ' so whole-token LIKE patterns work at the edges too
+        "search_text": f" {norm} ",
+        "attrs": attrs,
+        "noun": infer_noun(attrs),
+    }

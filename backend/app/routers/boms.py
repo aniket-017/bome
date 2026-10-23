@@ -3,7 +3,7 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
@@ -27,10 +27,21 @@ from app.bom_service import (
     suggest_layout,
 )
 from app.config import get_settings
+from app.costing import cost_bom
 from app.db import get_db
 from app.matcher import match_lines
 from app.models import Bom, BomLine
-from app.schemas import AcceptRequest, BomCreate, BomLineIn, BomLineOut, BomLineUpdate, BomOut, BomSummary, MatchRequest
+from app.schemas import (
+    AcceptRequest,
+    BomCosting,
+    BomCreate,
+    BomLineIn,
+    BomLineOut,
+    BomLineUpdate,
+    BomOut,
+    BomSummary,
+    MatchRequest,
+)
 from app.tabular import list_sheets, read_rows
 from app.vision import DOCUMENT_MIME_TYPES, VisionError, VisionNotConfigured, extract_bom_lines
 
@@ -335,6 +346,10 @@ def export_bom(bom_id: int, db: Session = Depends(get_db)):
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
+    return _xlsx_response(wb, bom, "matched")
+
+
+def _xlsx_response(wb: Workbook, bom: Bom, suffix: str) -> StreamingResponse:
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -342,8 +357,60 @@ def export_bom(bom_id: int, db: Session = Depends(get_db)):
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{safe}_matched.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe}_{suffix}.xlsx"'},
     )
+
+
+@router.get("/{bom_id}/costing", response_model=BomCosting)
+def bom_costing(bom_id: int, batch_qty: float = Query(1, gt=0, le=1_000_000), db: Session = Depends(get_db)):
+    return cost_bom(load_bom(db, bom_id), batch_qty)
+
+
+ISSUE_LABELS = {"unmatched": "Not matched to an item", "no_qty": "No quantity", "no_cost": "Item has no cost"}
+
+
+@router.get("/{bom_id}/costing/export")
+def export_costing(bom_id: int, batch_qty: float = Query(1, gt=0, le=1_000_000), db: Session = Depends(get_db)):
+    bom = load_bom(db, bom_id)
+    costing = cost_bom(bom, batch_qty)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOM Costing"
+    ws.append(["BOM", bom.name])
+    ws.append(["Project", bom.project])
+    ws.append(["Batch qty", batch_qty])
+    ws.append([])
+    headers = ["Line", "Item No", "Description", "Qty / unit", "Total Qty", "UoM", "Unit Cost", "Cost Basis",
+               "Line Cost", "Issue"]
+    ws.append(headers)
+    header_row = ws.max_row
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9E1F2")
+    for line in costing["lines"]:
+        part = line["part"]
+        ws.append([
+            line["line_no"], part.item_no if part else line["raw_item_no"],
+            part.description if part else line["raw_description"], line["qty"], line["total_qty"], line["uom"],
+            line["unit_cost"], {"avg_cost": "Weighted avg", "standard_cost": "Standard"}.get(line["cost_source"]),
+            line["line_cost"], ISSUE_LABELS.get(line["issue"]),
+        ])
+        if line["issue"]:
+            ws.cell(row=ws.max_row, column=10).fill = PatternFill("solid", fgColor="FFC7CE")
+    ws.append([])
+    ws.append(["", "", "Total material cost", "", "", "", "", "", costing["material_cost"]])
+    ws.append(["", "", "Material cost per unit", "", "", "", "", "", costing["unit_material_cost"]])
+    for row in (ws.max_row - 1, ws.max_row):
+        for cell in ws[row]:
+            cell.font = Font(bold=True)
+    for col in (7, 9):
+        for row in ws.iter_rows(min_row=header_row + 1, min_col=col, max_col=col):
+            row[0].number_format = "#,##0.00"
+    widths = {1: 6, 2: 14, 3: 60, 4: 10, 5: 10, 6: 7, 7: 12, 8: 13, 9: 14, 10: 24}
+    for col, width in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
+    return _xlsx_response(wb, bom, "costing")
 
 
 @router.get("/{bom_id}/image")

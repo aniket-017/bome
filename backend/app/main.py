@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import BACKEND_DIR, get_settings
-from app.routers import admin, boms, parts
+from app.routers import admin, boms, inventory, parts
 
 settings = get_settings()
 
@@ -20,6 +20,7 @@ app.add_middleware(
 
 app.include_router(parts.router)
 app.include_router(boms.router)
+app.include_router(inventory.router)
 app.include_router(admin.router)
 
 

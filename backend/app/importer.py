@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 import psycopg
 
 from app.config import get_settings
-from app.normalize import extract_attrs, infer_noun, normalize
+from app.normalize import derive_part_fields
 from app.tabular import cell_to_float, cell_to_str, detect_header_row, match_columns, read_rows
 
 PART_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -42,19 +42,18 @@ def _to_bool(value) -> bool | None:
 def _prepare_chunk(rows: list[tuple]) -> list[tuple]:
     out = []
     for item_no, desc, in_stock, uom, group, wtax in rows:
-        norm = normalize(desc)
-        attrs = extract_attrs(norm)
+        derived = derive_part_fields(desc)
         out.append((
             item_no,
             desc,
-            norm,
-            f" {norm} ",
+            derived["description_norm"],
+            derived["search_text"],
             group,
             uom,
             in_stock,
             wtax,
-            json.dumps(attrs, separators=(",", ":")),
-            infer_noun(attrs),
+            json.dumps(derived["attrs"], separators=(",", ":")),
+            derived["noun"],
         ))
     return out
 
@@ -99,7 +98,11 @@ def _prepare_all(rows: list[tuple]) -> list[tuple]:
     return prepared
 
 
-UPSERT_SQL = """
+# Once stock has moved through GRN/Issue, the ledger owns in_stock; the file only sets opening balances.
+_STOCK_MOVED = "EXISTS (SELECT 1 FROM stock_txns t WHERE t.part_id = parts.id AND t.txn_type <> 'OPENING')"
+_IMPORTED_STOCK = f"CASE WHEN {_STOCK_MOVED} THEN parts.in_stock ELSE EXCLUDED.in_stock END"
+
+UPSERT_SQL = f"""
 INSERT INTO parts (item_no, description, description_norm, search_text, item_group, uom_group,
                    in_stock, wtax_liable, attrs, noun, is_active)
 SELECT DISTINCT ON (item_no) item_no, description, description_norm, search_text, item_group, uom_group,
@@ -112,7 +115,7 @@ ON CONFLICT (item_no) DO UPDATE SET
     search_text = EXCLUDED.search_text,
     item_group = EXCLUDED.item_group,
     uom_group = EXCLUDED.uom_group,
-    in_stock = EXCLUDED.in_stock,
+    in_stock = {_IMPORTED_STOCK},
     wtax_liable = EXCLUDED.wtax_liable,
     attrs = EXCLUDED.attrs,
     noun = EXCLUDED.noun,
@@ -124,10 +127,23 @@ WHERE parts.description IS DISTINCT FROM EXCLUDED.description
    OR parts.noun IS DISTINCT FROM EXCLUDED.noun
    OR parts.item_group IS DISTINCT FROM EXCLUDED.item_group
    OR parts.uom_group IS DISTINCT FROM EXCLUDED.uom_group
-   OR parts.in_stock IS DISTINCT FROM EXCLUDED.in_stock
+   OR parts.in_stock IS DISTINCT FROM {_IMPORTED_STOCK}
    OR parts.wtax_liable IS DISTINCT FROM EXCLUDED.wtax_liable
    OR NOT parts.is_active
 RETURNING (xmax = 0) AS inserted
+"""
+
+# Replace the OPENING ledger rows of imported parts whose stock has not moved yet.
+OPENING_SQL = """
+WITH opening AS (
+    SELECT p.id, p.in_stock FROM parts p
+    WHERE p.item_no IN (SELECT item_no FROM parts_staging)
+      AND NOT EXISTS (SELECT 1 FROM stock_txns t WHERE t.part_id = p.id AND t.txn_type <> 'OPENING')
+), dropped AS (
+    DELETE FROM stock_txns t USING opening o WHERE t.part_id = o.id AND t.txn_type = 'OPENING'
+)
+INSERT INTO stock_txns (part_id, txn_type, qty, ref_type)
+SELECT id, 'OPENING', in_stock, 'IMPORT' FROM opening WHERE in_stock IS NOT NULL AND in_stock <> 0
 """
 
 
@@ -169,6 +185,7 @@ def import_parts(data: bytes, filename: str, sheet: str | int | None = None,
             results = cur.fetchall()
             inserted = sum(1 for (ins,) in results if ins)
             updated = len(results) - inserted
+            cur.execute(OPENING_SQL)
         conn.commit()
         conn.execute("ANALYZE parts")
     t_db = time.perf_counter()

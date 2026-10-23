@@ -1,8 +1,11 @@
 """API tests against the real database (skipped when PostgreSQL is not reachable)."""
 import io
+import uuid
 
 import pytest
 from openpyxl import Workbook, load_workbook
+
+from tests.conftest import requires_erp_db
 
 try:
     from fastapi.testclient import TestClient
@@ -108,6 +111,30 @@ def test_excel_upload_flow(client):
         assert ws.cell(row=2, column=8).value == item_no_of(REDUCER)
     finally:
         client.delete(f"/api/boms/{bom['id']}")
+
+
+@requires_erp_db
+def test_item_master_crud(tx_client):
+    item_no = f"PYT-{uuid.uuid4().hex[:10]}"
+    body = {"item_no": item_no, "description": "Ball bearing 6205 2RS ZQXPYTEST", "item_group": "BEARINGS",
+            "uom_group": "NOS", "standard_cost": 145.5}
+    r = tx_client.post("/api/parts", json=body)
+    assert r.status_code == 201, r.text
+    part = r.json()
+    assert part["noun"] == "BEARING" and part["standard_cost"] == 145.5 and part["in_stock"] is None
+    assert tx_client.post("/api/parts", json=body).status_code == 409
+
+    r = tx_client.patch(f"/api/parts/{part['id']}", json={"description": "Gate valve CL150 DN 100 ZQXPYTEST",
+                                                          "standard_cost": 900})
+    assert r.status_code == 200
+    assert r.json()["noun"] == "VALVE" and r.json()["standard_cost"] == 900
+    assert "DN100" in r.json()["description_norm"]
+
+    found = tx_client.get("/api/parts/search", params={"q": "ZQXPYTEST"}).json()["items"]
+    assert [i["item_no"] for i in found] == [item_no]
+    assert tx_client.delete(f"/api/parts/{part['id']}").status_code == 204
+    assert tx_client.get("/api/parts/search", params={"q": "ZQXPYTEST"}).json()["items"] == []
+    assert tx_client.get(f"/api/parts/{part['id']}").json()["is_active"] is False
 
 
 def test_manual_bom_and_line_edit(client):

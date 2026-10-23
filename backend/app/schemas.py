@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +12,32 @@ class PartOut(BaseModel):
     item_group: str | None = None
     uom_group: str | None = None
     in_stock: float | None = None
+    standard_cost: float | None = None
+    avg_cost: float | None = None
     noun: str | None = None
+
+
+class PartCreate(BaseModel):
+    item_no: str = Field(min_length=1, max_length=50)
+    description: str = Field(min_length=1)
+    item_group: str | None = Field(None, max_length=100)
+    uom_group: str | None = Field(None, max_length=50)
+    standard_cost: float | None = Field(None, ge=0)
+    wtax_liable: bool | None = None
+    noun: str | None = Field(None, max_length=60)
+    modifiers: dict[str, str] = {}
+    opening_stock: float | None = Field(None, ge=0)
+
+
+class PartUpdate(BaseModel):
+    description: str | None = Field(None, min_length=1)
+    item_group: str | None = Field(None, max_length=100)
+    uom_group: str | None = Field(None, max_length=50)
+    standard_cost: float | None = Field(None, ge=0)
+    wtax_liable: bool | None = None
+    noun: str | None = Field(None, max_length=60)
+    modifiers: dict[str, str] | None = None
+    is_active: bool | None = None
 
 
 class PartDetail(PartOut):
@@ -149,3 +174,152 @@ class AcceptRequest(BaseModel):
 
 class MatchRequest(BaseModel):
     force: bool = False
+
+
+class CostingLine(BaseModel):
+    line_id: int
+    line_no: int
+    raw_item_no: str | None
+    raw_description: str | None
+    part: PartOut | None
+    qty: float | None
+    total_qty: float | None
+    uom: str | None
+    unit_cost: float | None
+    cost_source: str | None  # "avg_cost" | "standard_cost" | None
+    line_cost: float | None
+    issue: str | None  # "unmatched" | "no_qty" | "no_cost" | None
+
+
+class BomCosting(BaseModel):
+    bom_id: int
+    bom_name: str
+    project: str | None
+    batch_qty: float
+    lines: list[CostingLine]
+    material_cost: float
+    unit_material_cost: float
+    line_count: int
+    costed_count: int
+    unmatched_count: int
+    uncosted_count: int
+
+
+class GrnLineIn(BaseModel):
+    part_id: int
+    qty: float = Field(gt=0)
+    unit_cost: float = Field(ge=0)
+
+
+class GrnCreate(BaseModel):
+    supplier: str | None = Field(None, max_length=200)
+    received_on: date | None = None
+    remarks: str | None = None
+    lines: list[GrnLineIn] = Field(min_length=1)
+
+
+class GrnLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    line_no: int
+    part_id: int
+    qty: float
+    unit_cost: float
+    part: PartOut
+
+
+class GrnSummary(BaseModel):
+    id: int
+    grn_no: str
+    supplier: str | None
+    received_on: date
+    remarks: str | None
+    created_at: datetime
+    line_count: int
+    total_value: float
+
+
+class GrnOut(GrnSummary):
+    lines: list[GrnLineOut]
+
+
+class MrLineIn(BaseModel):
+    part_id: int
+    qty_requested: float = Field(gt=0)
+
+
+class MrCreate(BaseModel):
+    department: str | None = Field(None, max_length=200)
+    job_ref: str | None = Field(None, max_length=200)
+    bom_id: int | None = None
+    remarks: str | None = None
+    lines: list[MrLineIn] = Field(min_length=1)
+
+
+class MrFromBom(BaseModel):
+    batch_qty: float = Field(1, gt=0)
+    department: str | None = Field(None, max_length=200)
+    job_ref: str | None = Field(None, max_length=200)
+
+
+class MrLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    line_no: int
+    part_id: int
+    qty_requested: float
+    qty_issued: float
+    part: PartOut
+
+
+class MrSummary(BaseModel):
+    id: int
+    mr_no: str
+    department: str | None
+    job_ref: str | None
+    bom_id: int | None
+    status: str
+    remarks: str | None
+    created_at: datetime
+    line_count: int
+
+
+class MrOut(MrSummary):
+    lines: list[MrLineOut]
+
+
+class IssueLine(BaseModel):
+    line_id: int
+    qty: float = Field(gt=0)
+
+
+class IssueRequest(BaseModel):
+    """Quantities to issue per MR line; omitted means issue everything still outstanding."""
+
+    lines: list[IssueLine] | None = None
+
+
+class StockItem(PartOut):
+    stock_value: float | None = None
+
+
+class StockResponse(BaseModel):
+    items: list[StockItem]
+    total: int
+    total_value: float
+
+
+class LedgerEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    txn_type: str
+    qty: float
+    unit_cost: float | None
+    ref_type: str | None
+    ref_id: int | None
+    ref_no: str | None = None
+    balance: float | None = None
+    created_at: datetime

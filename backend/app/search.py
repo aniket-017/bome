@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.normalize import SOFT_TOKENS, normalize
 
-PART_COLUMNS = "id, item_no, description, item_group, uom_group, in_stock, noun"
+PART_COLUMNS = "id, item_no, description, item_group, uom_group, in_stock, standard_cost, avg_cost, noun"
+NUMERIC_COLUMNS = ("in_stock", "standard_cost", "avg_cost")
 MAX_TOKENS = 8
 # Matching rows beyond this are not ranked: generic queries ("ELBOW") would otherwise score
 # hundreds of thousands of rows per keystroke. Users narrow down by typing more.
@@ -173,7 +174,8 @@ def search_parts(db: Session, q: str, group: str | None = None, noun: str | None
 
     for item in items:
         item["score"] = round(float(item["score"] or 0), 3)
-        item["in_stock"] = float(item["in_stock"]) if item["in_stock"] is not None else None
+        for col in NUMERIC_COLUMNS:
+            item[col] = float(item[col]) if item[col] is not None else None
     return {
         "items": items,
         "fuzzy": fuzzy,

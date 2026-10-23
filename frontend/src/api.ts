@@ -1,12 +1,24 @@
 import type {
   Bom,
+  BomCosting,
   BomLine,
   BomLineInput,
   BomSummary,
   ColumnField,
+  Grn,
+  GrnInput,
+  GrnSummary,
   GroupCount,
   ImportJob,
+  LedgerEntry,
+  Mr,
+  MrInput,
+  MrSummary,
+  PartDetail,
+  PartInput,
   PartSearchResponse,
+  StockAvailability,
+  StockResponse,
   UploadPreview,
 } from "./types";
 
@@ -44,6 +56,36 @@ export const api = {
   },
   partGroups: () => request<GroupCount[]>("/api/parts/groups"),
   partStats: () => request<{ total: number; active: number }>("/api/parts/stats"),
+  getPart: (id: number) => request<PartDetail>(`/api/parts/${id}`),
+  createPart: (body: PartInput) => request<PartDetail>("/api/parts", { method: "POST", body: json(body) }),
+  updatePart: (id: number, body: PartInput) =>
+    request<PartDetail>(`/api/parts/${id}`, { method: "PATCH", body: json(body) }),
+  deletePart: (id: number) => request<void>(`/api/parts/${id}`, { method: "DELETE" }),
+
+  bomCosting: (id: number, batchQty: number) => request<BomCosting>(`/api/boms/${id}/costing?batch_qty=${batchQty}`),
+  costingExportUrl: (id: number, batchQty: number) => `/api/boms/${id}/costing/export?batch_qty=${batchQty}`,
+
+  listGrns: () => request<GrnSummary[]>("/api/inventory/grns"),
+  getGrn: (id: number) => request<Grn>(`/api/inventory/grns/${id}`),
+  createGrn: (body: GrnInput) => request<Grn>("/api/inventory/grns", { method: "POST", body: json(body) }),
+  listMrs: () => request<MrSummary[]>("/api/inventory/mrs"),
+  getMr: (id: number) => request<Mr>(`/api/inventory/mrs/${id}`),
+  createMr: (body: MrInput) => request<Mr>("/api/inventory/mrs", { method: "POST", body: json(body) }),
+  mrFromBom: (bomId: number, body: { batch_qty: number; department?: string | null; job_ref?: string | null }) =>
+    request<Mr>(`/api/inventory/mrs/from-bom/${bomId}`, { method: "POST", body: json(body) }),
+  issueMr: (id: number, lines?: { line_id: number; qty: number }[]) =>
+    request<Mr>(`/api/inventory/mrs/${id}/issue`, { method: "POST", body: json(lines ? { lines } : {}) }),
+  stock(opts: { q?: string; group?: string | null; availability?: StockAvailability; limit?: number; offset?: number }) {
+    const params = new URLSearchParams({
+      q: opts.q ?? "",
+      availability: opts.availability ?? "in_stock",
+      limit: String(opts.limit ?? 50),
+      offset: String(opts.offset ?? 0),
+    });
+    if (opts.group) params.set("group", opts.group);
+    return request<StockResponse>(`/api/inventory/stock?${params}`);
+  },
+  ledger: (partId: number) => request<LedgerEntry[]>(`/api/inventory/ledger/${partId}`),
 
   listBoms: () => request<BomSummary[]>("/api/boms"),
   getBom: (id: number) => request<Bom>(`/api/boms/${id}`),

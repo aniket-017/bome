@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -19,6 +20,8 @@ from app.db import Base
 
 MATCH_STATUSES = ("exact_item_no", "exact_desc", "auto", "review", "unmatched", "manual")
 SOURCE_TYPES = ("excel", "manual", "image")
+MR_STATUSES = ("open", "partial", "issued")
+TXN_TYPES = ("OPENING", "GRN", "ISSUE")
 
 
 class Part(Base):
@@ -33,6 +36,9 @@ class Part(Base):
     item_group: Mapped[str | None] = mapped_column(String(100), index=True)
     uom_group: Mapped[str | None] = mapped_column(String(50))
     in_stock: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    standard_cost: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    # weighted-average cost of the stock on hand, maintained by GRN postings
+    avg_cost: Mapped[float | None] = mapped_column(Numeric(18, 4))
     wtax_liable: Mapped[bool | None] = mapped_column(Boolean)
     attrs: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     noun: Mapped[str | None] = mapped_column(String(60), index=True)
@@ -106,3 +112,82 @@ class BomLine(Base):
 
     bom: Mapped[Bom] = relationship(back_populates="lines")
     matched_part: Mapped[Part | None] = relationship(lazy="joined")
+
+
+class Grn(Base):
+    """Goods Receipt Note: materials received from a supplier."""
+
+    __tablename__ = "grns"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    grn_no: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    supplier: Mapped[str | None] = mapped_column(String(200))
+    received_on: Mapped[date] = mapped_column(Date, nullable=False, server_default=func.current_date())
+    remarks: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    lines: Mapped[list["GrnLine"]] = relationship(
+        back_populates="grn", cascade="all, delete-orphan", order_by="GrnLine.line_no"
+    )
+
+
+class GrnLine(Base):
+    __tablename__ = "grn_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    grn_id: Mapped[int] = mapped_column(ForeignKey("grns.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    part_id: Mapped[int] = mapped_column(ForeignKey("parts.id"), index=True)
+    qty: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    unit_cost: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+
+    grn: Mapped[Grn] = relationship(back_populates="lines")
+    part: Mapped[Part] = relationship(lazy="joined")
+
+
+class MaterialRequisition(Base):
+    """Material Requisition: a request for materials, issued from stock line by line."""
+
+    __tablename__ = "material_requisitions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    mr_no: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
+    department: Mapped[str | None] = mapped_column(String(200))
+    job_ref: Mapped[str | None] = mapped_column(String(200))
+    bom_id: Mapped[int | None] = mapped_column(ForeignKey("boms.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="open")
+    remarks: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    lines: Mapped[list["MrLine"]] = relationship(
+        back_populates="mr", cascade="all, delete-orphan", order_by="MrLine.line_no"
+    )
+
+
+class MrLine(Base):
+    __tablename__ = "mr_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    mr_id: Mapped[int] = mapped_column(ForeignKey("material_requisitions.id", ondelete="CASCADE"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    part_id: Mapped[int] = mapped_column(ForeignKey("parts.id"), index=True)
+    qty_requested: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    qty_issued: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, server_default="0")
+
+    mr: Mapped[MaterialRequisition] = relationship(back_populates="lines")
+    part: Mapped[Part] = relationship(lazy="joined")
+
+
+class StockTxn(Base):
+    """Stock ledger: every change of parts.in_stock, signed (+receipt, -issue)."""
+
+    __tablename__ = "stock_txns"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    part_id: Mapped[int] = mapped_column(ForeignKey("parts.id"))
+    txn_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    qty: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    unit_cost: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    ref_type: Mapped[str | None] = mapped_column(String(20))
+    ref_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { BomReviewGrid, type LineActions } from "../components/BomReviewGrid";
 import { PartAutocomplete } from "../components/PartAutocomplete";
@@ -107,6 +107,12 @@ export function BomDetailPage() {
           <a className="btn primary" href={api.exportUrl(id)}>
             Export Excel
           </a>
+          <Link className="btn" to={`/boms/${id}/costing`} title="Material cost of this BOM">
+            Costing
+          </Link>
+          <Link className="btn" to={`/inventory/mr/new?bom=${id}`} title="Request this BOM's materials from stores">
+            Create MR
+          </Link>
           <button
             className="danger"
             disabled={!!pageBusy}
