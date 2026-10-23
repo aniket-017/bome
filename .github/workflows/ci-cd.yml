@@ -1,0 +1,82 @@
+name: BOM CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Setup SSH for Deployment
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 154.53.42.27 >> ~/.ssh/known_hosts
+
+      # Step 2: Deploy to the server
+      - name: Deploy to server
+        if: github.ref == 'refs/heads/main'
+        run: |
+          ssh admin@154.53.42.27 << 'EOF'
+           set -e
+           echo "🔐 Starting deployment to remote server"
+
+           if [ -f ~/bome/backend/.env ]; then
+             echo "📁 Backing up existing .env file"
+             cp ~/bome/backend/.env ~/.env.bak
+           fi
+
+           if [ -d ~/bome ]; then
+             echo "📂 Pulling latest changes from Git"
+             cd ~/bome
+             git reset --hard
+             git pull origin main
+           else
+             echo "📂 Cloning repository"
+             git clone https://github.com/aniket-017/bome.git ~/bome
+             cd ~/bome
+           fi
+
+           if [ -f ~/.env.bak ]; then
+             echo "♻️ Restoring .env from backup"
+             mv ~/.env.bak ~/bome/backend/.env
+           fi
+
+           echo "🐍 Installing backend dependencies"
+           cd ~/bome/backend
+           if [ ! -d .venv ]; then
+             python3 -m venv .venv
+           fi
+           .venv/bin/pip install --upgrade pip
+           .venv/bin/pip install -r requirements.txt
+
+           echo "📦 Installing frontend dependencies"
+           cd ~/bome/frontend
+           npm ci
+           echo "🛠️ Building frontend"
+           npm run build
+
+           echo "🗄️ Running database migrations"
+           cd ~/bome/backend
+           .venv/bin/alembic upgrade head
+
+           echo "🚀 Starting backend with PM2"
+           pm2 delete bome 2>/dev/null || true
+           pm2 start "$HOME/bome/backend/.venv/bin/uvicorn" \
+             --name bome \
+             --interpreter "$HOME/bome/backend/.venv/bin/python" \
+             --cwd "$HOME/bome/backend" \
+             -- app.main:app --host 127.0.0.1 --port 8767
+           pm2 save
+
+           echo "📋 PM2 process list:"
+           pm2 list
+          EOF

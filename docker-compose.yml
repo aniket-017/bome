@@ -24,7 +24,7 @@ services:
       - path: ./backend/.env
         required: false
     ports:
-      - "8000:8000"
+      - "8767:8767"
     depends_on:
       db:
         condition: service_healthy
